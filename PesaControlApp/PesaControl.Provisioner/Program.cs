@@ -1,7 +1,7 @@
 using PesaControl.Data.Data;
 
 Console.WriteLine("PesaControl - Provisionamiento de SuperAdmin");
-Console.Write("Ruta de base de datos (Enter para la predeterminada): ");
+Console.Write("Ruta de la base de datos local (Enter para la predeterminada): ");
 var databasePath = Console.ReadLine();
 Console.Write("Usuario de superadmin: ");
 var username = Console.ReadLine()?.Trim() ?? "";

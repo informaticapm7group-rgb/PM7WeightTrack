@@ -2,20 +2,17 @@
 using System;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
-using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using PesaControl.Data.Data;
 
 #nullable disable
 
-namespace PesaControl.Data.Migrations
+namespace PesaControl.Data.Migrations.Sqlite
 {
-    [DbContext(typeof(AppDbContext))]
-    [Migration("20260716012125_AddDvrSupport")]
-    partial class AddDvrSupport
+    [DbContext(typeof(LocalDbContext))]
+    partial class LocalDbContextModelSnapshot : ModelSnapshot
     {
-        /// <inheritdoc />
-        protected override void BuildTargetModel(ModelBuilder modelBuilder)
+        protected override void BuildModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder.HasAnnotation("ProductVersion", "10.0.9");
@@ -382,6 +379,9 @@ namespace PesaControl.Data.Migrations
                     b.Property<int>("TcpPort")
                         .HasColumnType("INTEGER");
 
+                    b.Property<int>("WeightDecimals")
+                        .HasColumnType("INTEGER");
+
                     b.HasKey("Id");
 
                     b.ToTable("ScaleConfigs", (string)null);
@@ -409,6 +409,20 @@ namespace PesaControl.Data.Migrations
                         .IsUnique();
 
                     b.ToTable("SystemConfigs", (string)null);
+                });
+
+            modelBuilder.Entity("PesaControl.Core.Models.TicketCounter", b =>
+                {
+                    b.Property<string>("Prefix")
+                        .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<int>("LastNumber")
+                        .HasColumnType("INTEGER");
+
+                    b.HasKey("Prefix");
+
+                    b.ToTable("TicketCounters", (string)null);
                 });
 
             modelBuilder.Entity("PesaControl.Core.Models.TicketTemplate", b =>
@@ -526,9 +540,9 @@ namespace PesaControl.Data.Migrations
                     b.Property<DateTime?>("LastLogin")
                         .HasColumnType("TEXT");
 
-                    b.Property<string>("Password")
+                    b.Property<string>("PasswordHash")
                         .IsRequired()
-                        .HasMaxLength(200)
+                        .HasMaxLength(512)
                         .HasColumnType("TEXT");
 
                     b.Property<string>("Role")
@@ -584,6 +598,9 @@ namespace PesaControl.Data.Migrations
                         .HasMaxLength(20)
                         .HasColumnType("TEXT");
 
+                    b.Property<DateTime>("ModifiedAt")
+                        .HasColumnType("TEXT");
+
                     b.Property<decimal>("NetWeight")
                         .HasColumnType("decimal(18,3)");
 
@@ -615,9 +632,24 @@ namespace PesaControl.Data.Migrations
                     b.Property<int?>("ProductId")
                         .HasColumnType("INTEGER");
 
+                    b.Property<string>("StationCode")
+                        .IsRequired()
+                        .HasMaxLength(4)
+                        .HasColumnType("TEXT");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(20)
+                        .HasColumnType("TEXT");
+
+                    b.Property<string>("SyncStatus")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(10)
+                        .HasColumnType("TEXT")
+                        .HasDefaultValue("Pending");
+
+                    b.Property<DateTime?>("SyncedAt")
                         .HasColumnType("TEXT");
 
                     b.Property<decimal>("TareWeight")
@@ -634,6 +666,9 @@ namespace PesaControl.Data.Migrations
                     b.Property<DateTime?>("WeighOutTime")
                         .HasColumnType("TEXT");
 
+                    b.Property<int>("WeightDecimals")
+                        .HasColumnType("INTEGER");
+
                     b.HasKey("Id");
 
                     b.HasIndex("CompanyId");
@@ -641,6 +676,8 @@ namespace PesaControl.Data.Migrations
                     b.HasIndex("LicensePlate");
 
                     b.HasIndex("ProductId");
+
+                    b.HasIndex("SyncStatus");
 
                     b.HasIndex("TicketNumber")
                         .IsUnique();

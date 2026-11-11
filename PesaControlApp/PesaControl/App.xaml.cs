@@ -1,4 +1,6 @@
 ﻿using System.Windows;
+using PesaControl.Data.Data;
+using PesaControl.UI;
 
 namespace PesaControl
 {
@@ -7,6 +9,63 @@ namespace PesaControl
     /// </summary>
     public partial class App : Application
     {
+        protected override async void OnStartup(StartupEventArgs e)
+        {
+            base.OnStartup(e);
+
+            // Números con punto de miles y coma decimal (36.000), también en los bindings XAML.
+            var culture = new System.Globalization.CultureInfo("es-CL");
+            System.Globalization.CultureInfo.DefaultThreadCurrentCulture = culture;
+            System.Globalization.CultureInfo.DefaultThreadCurrentUICulture = culture;
+            System.Globalization.CultureInfo.CurrentCulture = culture;
+            FrameworkElement.LanguageProperty.OverrideMetadata(typeof(FrameworkElement),
+                new FrameworkPropertyMetadata(System.Windows.Markup.XmlLanguage.GetLanguage(culture.IetfLanguageTag)));
+
+            // Sin ventanas abiertas durante la configuración inicial, la app no debe cerrarse sola.
+            ShutdownMode = ShutdownMode.OnExplicitShutdown;
+            try
+            {
+                var database = new DatabaseService();
+                await database.InitializeAsync();
+
+                // Modo demostración: solo con una base aparte (PESACONTROL_DB_PATH); crea usuarios y datos ficticios.
+                if (DemoDataSeeder.IsRequested())
+                    await DemoDataSeeder.SeedAsync(database);
+
+                string? createdAdmin = null;
+                if (!await database.HasAdminAsync())
+                {
+                    var setup = new InitialAdminWindow(database);
+                    if (setup.ShowDialog() != true || !setup.Completed)
+                    {
+                        Shutdown();
+                        return;
+                    }
+                    createdAdmin = setup.CreatedUsername;
+                }
+
+                // Sin código de puesto no se puede numerar tickets; también cubre bases creadas antes de este paso.
+                if (await database.GetStationCodeAsync() is null)
+                {
+                    var stationSetup = new StationCodeWindow(database);
+                    if (stationSetup.ShowDialog() != true || !stationSetup.Completed)
+                    {
+                        Shutdown();
+                        return;
+                    }
+                }
+
+                var login = new UI.MainWindow(database, createdAdmin);
+                MainWindow = login;
+                ShutdownMode = ShutdownMode.OnLastWindowClose;
+                login.Show();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"No se pudo inicializar la base de datos: {ex.Message}", "PesaControl", MessageBoxButton.OK, MessageBoxImage.Error);
+                Shutdown();
+            }
+        }
     }
 
 }

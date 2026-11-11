@@ -129,21 +129,17 @@ public class ExportImportService
 
             progress?.Report(10);
 
-            var dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "pesacontrol.db");
-            if (File.Exists(dbPath))
-            {
-                File.Copy(dbPath, dbPath + ".bak", overwrite: true);
-            }
-
-            if (File.Exists(dbPath))
-            {
-                File.Delete(dbPath);
-            }
-
             progress?.Report(20);
 
             using var context = _db.CreateContext();
-            await context.Database.EnsureCreatedAsync();
+            await context.Database.MigrateAsync();
+
+            // El código de puesto es de este equipo: se conserva aunque el respaldo venga de otro puesto.
+            var stationCode = await _db.GetStationCodeAsync();
+
+            // La restauración reemplaza todos los datos; si algo falla, la transacción deja la base como estaba.
+            await using var transaction = await context.Database.BeginTransactionAsync();
+            await ClearAllTablesAsync(context);
 
             foreach (var entity in context.ChangeTracker.Entries().ToList())
             {
@@ -239,10 +235,16 @@ public class ExportImportService
 
             if (package.SystemConfigs.Count > 0)
             {
-                context.SystemConfigs.AddRange(package.SystemConfigs);
+                context.SystemConfigs.AddRange(package.SystemConfigs.Where(c => c.Key != DatabaseService.StationCodeKey));
                 await context.SaveChangesAsync();
             }
             result.SystemConfigsImported = package.SystemConfigs.Count;
+
+            if (stationCode is not null)
+            {
+                context.SystemConfigs.Add(new SystemConfig { Key = DatabaseService.StationCodeKey, Value = stationCode });
+                await context.SaveChangesAsync();
+            }
 
             progress?.Report(70);
 
@@ -277,6 +279,8 @@ public class ExportImportService
                 await context.SaveChangesAsync();
             }
 
+            await transaction.CommitAsync();
+
             result.Success = true;
             result.Message = $"Importación completada. {result.WeighingRecordsImported} registros de pesaje, " +
                              $"{result.CompaniesImported} empresas, {result.ProductsImported} productos, " +
@@ -292,6 +296,23 @@ public class ExportImportService
         }
 
         return result;
+    }
+
+    private static IEnumerable<string> GetTableNames(AppDbContext context)
+        => context.Model.GetEntityTypes().Select(t => t.GetTableName()).OfType<string>().Distinct();
+
+    private static async Task ClearAllTablesAsync(AppDbContext context)
+    {
+        // Con las claves foráneas diferidas hasta el commit, el orden de borrado no importa.
+        await context.Database.ExecuteSqlRawAsync("PRAGMA defer_foreign_keys = ON;");
+        foreach (var table in GetTableNames(context))
+        {
+#pragma warning disable EF1002 // los nombres salen del modelo de EF, no de entrada del usuario
+            await context.Database.ExecuteSqlRawAsync($"DELETE FROM \"{table}\"");
+#pragma warning restore EF1002
+        }
+        // Reinicia los contadores de autoincremento; los registros importados traen su propio Id.
+        await context.Database.ExecuteSqlRawAsync("DELETE FROM sqlite_sequence");
     }
 
     private async Task<ExportPackage> GatherDataAsync(IProgress<int>? progress = null)
@@ -339,7 +360,8 @@ public class ExportImportService
         });
         progress?.Report(40);
 
-        package.SystemConfigs = await context.SystemConfigs.ToListAsync();
+        // El código de puesto es propio de cada equipo: no viaja en los respaldos.
+        package.SystemConfigs = await context.SystemConfigs.Where(c => c.Key != DatabaseService.StationCodeKey).ToListAsync();
         progress?.Report(45);
 
         package.BarrierConfigs = await context.BarrierConfigs.ToListAsync();
@@ -389,10 +411,5 @@ public class ExportImportService
         return Convert.ToHexStringLower(hash);
     }
 
-    private static string GetPhotosDirectory()
-    {
-        return Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-            "PesaControl", "Photos");
-    }
+    private static string GetPhotosDirectory() => DatabaseSettings.GetPhotosDirectory();
 }

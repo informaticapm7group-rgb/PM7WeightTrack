@@ -8,7 +8,7 @@ using PesaControl.Core.Security;
 
 namespace PesaControl.UI.ViewModels;
 
-public partial class UsersViewModel : ObservableObject
+public partial class UsersViewModel : ObservableObject, IUnsavedChanges
 {
     private readonly DatabaseService _db;
     private readonly User _currentUser;
@@ -23,12 +23,53 @@ public partial class UsersViewModel : ObservableObject
     // Editor fields
     [ObservableProperty] private string _editUsername = "";
     [ObservableProperty] private string _editFullName = "";
-    [ObservableProperty] private string _editEmail = "";
     [ObservableProperty] private string _editPassword = "";
+    [ObservableProperty] private string _editPasswordConfirm = "";
     [ObservableProperty] private string _editRole = "Operator";
     [ObservableProperty] private bool _editIsActive = true;
 
     [ObservableProperty] private string _statusMessage = "";
+
+    // Per-field validation errors shown under each editor field
+    [ObservableProperty] private string _usernameError = "";
+    [ObservableProperty] private string _fullNameError = "";
+    [ObservableProperty] private string _roleError = "";
+    [ObservableProperty] private string _passwordError = "";
+    [ObservableProperty] private string _passwordConfirmError = "";
+
+    private void ClearFieldErrors()
+    {
+        UsernameError = "";
+        FullNameError = "";
+        RoleError = "";
+        PasswordError = "";
+        PasswordConfirmError = "";
+    }
+
+    // A field's error disappears as soon as the user edits that field
+    partial void OnEditUsernameChanged(string value) => UsernameError = "";
+    partial void OnEditFullNameChanged(string value) => FullNameError = "";
+    partial void OnEditRoleChanged(string value) => RoleError = "";
+    partial void OnEditPasswordChanged(string value) => PasswordError = "";
+    partial void OnEditPasswordConfirmChanged(string value) => PasswordConfirmError = "";
+
+    private readonly EditorTracker _editor;
+
+    partial void OnIsEditorOpenChanged(bool value)
+    {
+        if (!value) _editor.End();
+    }
+
+    public bool HasUnsavedChanges => IsEditorOpen && _editor.IsDirty;
+    public string UnsavedChangesDescription => "Usuario";
+
+    public async Task<bool> SaveChangesAsync()
+    {
+        await SaveUserAsync();
+        return !IsEditorOpen;
+    }
+
+    public void DiscardChanges() => CancelEdit();
 
     public List<string> Roles { get; }
 
@@ -36,6 +77,7 @@ public partial class UsersViewModel : ObservableObject
     {
         _db = db;
         _currentUser = currentUser;
+        _editor = new EditorTracker(() => EditorTracker.Snap(EditUsername, EditFullName, EditRole, EditIsActive, EditPassword, EditPasswordConfirm));
         Roles = currentUser.Role == UserRoles.SuperAdmin
             ? [UserRoles.SuperAdmin, UserRoles.Admin, UserRoles.Operator, UserRoles.Viewer]
             : [UserRoles.Operator, UserRoles.Viewer];
@@ -63,59 +105,95 @@ public partial class UsersViewModel : ObservableObject
         }
     }
 
+    // Asks what to do with an open editor that has changes before another one replaces it
+    private async Task<bool> ConfirmReplaceEditorAsync()
+    {
+        if (!HasUnsavedChanges) return true;
+        switch (UnsavedChangesDialog.Ask(UnsavedChangesDescription))
+        {
+            case UnsavedChangesChoice.Save:
+                return await SaveChangesAsync();
+            case UnsavedChangesChoice.Discard:
+                return true;
+            default:
+                return false;
+        }
+    }
+
     [RelayCommand]
-    private void NewUser()
+    private async Task NewUserAsync()
     {
         if (!UserRoles.CanManageUsers(_currentUser.Role)) return;
+        if (!await ConfirmReplaceEditorAsync()) return;
         SelectedUser = null;
         EditUsername = "";
         EditFullName = "";
-        EditEmail = "";
         EditPassword = "";
+        EditPasswordConfirm = "";
         EditRole = "Operator";
         EditIsActive = true;
+        ClearFieldErrors();
         IsEditing = false;
+        _editor.Begin();
         IsEditorOpen = true;
     }
 
     [RelayCommand]
-    private void EditUser()
+    private async Task EditUserAsync(User? user)
     {
-        if (SelectedUser is null) return;
-        if (!UserRoles.CanManageRole(_currentUser.Role, SelectedUser.Role))
+        var target = user ?? SelectedUser;
+        if (target is null) return;
+        if (!UserRoles.CanManageRole(_currentUser.Role, target.Role))
         {
             StatusMessage = "No tiene permisos para administrar este usuario";
             return;
         }
+        if (!await ConfirmReplaceEditorAsync()) return;
+        SelectedUser = target;
 
         EditUsername = SelectedUser.Username;
         EditFullName = SelectedUser.FullName;
-        EditEmail = SelectedUser.Email;
         EditPassword = "";
+        EditPasswordConfirm = "";
         EditRole = SelectedUser.Role;
         EditIsActive = SelectedUser.IsActive;
+        ClearFieldErrors();
         IsEditing = true;
+        _editor.Begin();
         IsEditorOpen = true;
     }
 
     [RelayCommand]
     private async Task SaveUserAsync()
     {
-        if (string.IsNullOrWhiteSpace(EditUsername))
-        {
-            StatusMessage = "El nombre de usuario es obligatorio";
-            return;
-        }
+        ClearFieldErrors();
+        StatusMessage = "";
+
+        EditUsername = EditUsername.Trim();
+        var usernameChanged = !IsEditing || SelectedUser is null || EditUsername != SelectedUser.Username;
+        if (usernameChanged && !UsernamePolicy.IsValid(EditUsername))
+            UsernameError = UsernamePolicy.Describe();
+
+        EditFullName = FullNamePolicy.Normalize(EditFullName);
+        if (!FullNamePolicy.HasNameAndSurname(EditFullName))
+            FullNameError = "Ingrese nombre y apellido.";
+        else if (!FullNamePolicy.HasOnlyValidChars(EditFullName))
+            FullNameError = FullNamePolicy.DescribeInvalidChars();
+        else if (FullNamePolicy.IsTooLong(EditFullName))
+            FullNameError = FullNamePolicy.DescribeTooLong();
+
         if (!Roles.Contains(EditRole))
-        {
-            StatusMessage = "No tiene permisos para asignar ese rol";
+            RoleError = "No tiene permisos para asignar ese rol";
+
+        var checkPassword = !IsEditing || !string.IsNullOrWhiteSpace(EditPassword);
+        if (checkPassword && !PasswordPolicy.IsValid(EditRole, EditPassword))
+            PasswordError = PasswordPolicy.Describe(EditRole);
+        if (checkPassword && EditPassword != EditPasswordConfirm)
+            PasswordConfirmError = "Las contraseñas no coinciden";
+
+        if (UsernameError != "" || FullNameError != "" || RoleError != ""
+            || PasswordError != "" || PasswordConfirmError != "")
             return;
-        }
-        if ((!IsEditing || !string.IsNullOrWhiteSpace(EditPassword)) && !IsValidPassword(EditPassword))
-        {
-            StatusMessage = "La contraseña debe tener entre 14 y 128 caracteres";
-            return;
-        }
 
         try
         {
@@ -129,9 +207,17 @@ public partial class UsersViewModel : ObservableObject
                     StatusMessage = "No tiene permisos para administrar este usuario";
                     return;
                 }
+                if (usernameChanged)
+                {
+                    var taken = await repo.FindAsync(u => u.Username == EditUsername && u.Id != SelectedUser.Id);
+                    if (taken.Count > 0)
+                    {
+                        UsernameError = "Ya existe un usuario con este nombre de usuario";
+                        return;
+                    }
+                }
                 SelectedUser.Username = EditUsername;
                 SelectedUser.FullName = EditFullName;
-                SelectedUser.Email = EditEmail;
                 SelectedUser.Role = EditRole;
                 SelectedUser.IsActive = EditIsActive;
 
@@ -146,7 +232,7 @@ public partial class UsersViewModel : ObservableObject
                 var existing = await repo.FindAsync(u => u.Username == EditUsername);
                 if (existing.Count > 0)
                 {
-                    StatusMessage = "Ya existe un usuario con ese nombre";
+                    UsernameError = "Ya existe un usuario con este nombre de usuario";
                     return;
                 }
 
@@ -154,7 +240,6 @@ public partial class UsersViewModel : ObservableObject
                 {
                     Username = EditUsername,
                     FullName = EditFullName,
-                    Email = EditEmail,
                     PasswordHash = _passwordHasher.Hash(EditPassword),
                     Role = EditRole,
                     IsActive = EditIsActive,
@@ -176,7 +261,7 @@ public partial class UsersViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private void ToggleEditor()
+    private async Task ToggleEditorAsync()
     {
         if (IsEditorOpen)
         {
@@ -186,9 +271,9 @@ public partial class UsersViewModel : ObservableObject
         else
         {
             if (SelectedUser is not null)
-                EditUser();
+                await EditUserAsync(null);
             else
-                NewUser();
+                await NewUserAsync();
         }
     }
 
@@ -200,14 +285,22 @@ public partial class UsersViewModel : ObservableObject
     }
 
     [RelayCommand]
-    private async Task DeleteUserAsync()
+    private async Task DeleteUserAsync(User? target)
     {
+        if (target is not null) SelectedUser = target;
         if (SelectedUser is null) return;
         if (!UserRoles.CanManageRole(_currentUser.Role, SelectedUser.Role))
         {
             StatusMessage = "No tiene permisos para eliminar este usuario";
             return;
         }
+
+        var confirm = System.Windows.MessageBox.Show(
+            $"¿Eliminar al usuario \"{SelectedUser.Username}\"?",
+            "Eliminar usuario",
+            System.Windows.MessageBoxButton.YesNo,
+            System.Windows.MessageBoxImage.Warning);
+        if (confirm != System.Windows.MessageBoxResult.Yes) return;
 
         try
         {
@@ -238,5 +331,4 @@ public partial class UsersViewModel : ObservableObject
             StatusMessage = $"Seleccionado: {value.Username}";
     }
 
-    private static bool IsValidPassword(string password) => password.Length is >= 14 and <= 128;
 }

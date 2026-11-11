@@ -3,10 +3,10 @@ using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
 
-namespace PesaControl.Data.Migrations
+namespace PesaControl.Data.Migrations.Sqlite
 {
     /// <inheritdoc />
-    public partial class AddDvrSupport : Migration
+    public partial class InitialCreate : Migration
     {
         /// <inheritdoc />
         protected override void Up(MigrationBuilder migrationBuilder)
@@ -126,6 +126,18 @@ namespace PesaControl.Data.Migrations
                 });
 
             migrationBuilder.CreateTable(
+                name: "TicketCounters",
+                columns: table => new
+                {
+                    Prefix = table.Column<string>(type: "TEXT", maxLength: 10, nullable: false),
+                    LastNumber = table.Column<int>(type: "INTEGER", nullable: false)
+                },
+                constraints: table =>
+                {
+                    table.PrimaryKey("PK_TicketCounters", x => x.Prefix);
+                });
+
+            migrationBuilder.CreateTable(
                 name: "TicketTemplates",
                 columns: table => new
                 {
@@ -174,7 +186,7 @@ namespace PesaControl.Data.Migrations
                     Id = table.Column<int>(type: "INTEGER", nullable: false)
                         .Annotation("Sqlite:Autoincrement", true),
                     Username = table.Column<string>(type: "TEXT", maxLength: 50, nullable: false),
-                    Password = table.Column<string>(type: "TEXT", maxLength: 200, nullable: false),
+                    PasswordHash = table.Column<string>(type: "TEXT", maxLength: 512, nullable: false),
                     FullName = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
                     Email = table.Column<string>(type: "TEXT", maxLength: 100, nullable: false),
                     Role = table.Column<string>(type: "TEXT", maxLength: 20, nullable: false, defaultValue: "Operator"),
@@ -424,6 +436,9 @@ namespace PesaControl.Data.Migrations
 
             migrationBuilder.DropTable(
                 name: "SystemConfigs");
+
+            migrationBuilder.DropTable(
+                name: "TicketCounters");
 
             migrationBuilder.DropTable(
                 name: "TicketTemplates");

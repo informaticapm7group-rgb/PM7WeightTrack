@@ -6,121 +6,113 @@ namespace PesaControl.Data.Data;
 
 public class DatabaseService
 {
-    private readonly string _dbPath;
+    private readonly string _databasePath;
     private readonly IPasswordHasher _passwordHasher = new Argon2idPasswordHasher();
 
-    public DatabaseService()
+    public DatabaseService() : this(DatabaseSettings.GetDatabasePath())
     {
-        _dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "pesacontrol.db");
     }
 
-    public DatabaseService(string dbPath)
+    public DatabaseService(string databasePath)
     {
-        _dbPath = dbPath;
+        _databasePath = databasePath;
     }
 
     public async Task InitializeAsync()
     {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(_databasePath))!);
+
         using var context = CreateContext();
-        await context.Database.EnsureCreatedAsync();
-
-        await MigrateUserPasswordsAsync(context);
-
-        await EnsureLegacyRawSqlAsync(context);
-
-        await context.Database.ExecuteSqlRawAsync(@"
-            CREATE TABLE IF NOT EXISTS DvrConfigs (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                Name TEXT NOT NULL,
-                Manufacturer TEXT NOT NULL DEFAULT 'Dahua',
-                Model TEXT NOT NULL DEFAULT 'DH-XVR1B04-I',
-                IpAddress TEXT NOT NULL,
-                HttpPort INTEGER NOT NULL DEFAULT 80,
-                RtspPort INTEGER NOT NULL DEFAULT 554,
-                Username TEXT NOT NULL,
-                Password TEXT,
-                MaxChannels INTEGER NOT NULL DEFAULT 4,
-                IsActive INTEGER NOT NULL DEFAULT 1
-            )");
-        try
-        {
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE CameraConfigs ADD COLUMN DvrConfigId INTEGER NULL REFERENCES DvrConfigs(Id)");
-        }
-        catch { }
-        try
-        {
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE CameraConfigs ADD COLUMN ChannelNumber INTEGER NULL");
-        }
-        catch { }
-        try
-        {
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE CameraConfigs ADD COLUMN Subtype INTEGER NOT NULL DEFAULT 0");
-        }
-        catch { }
+        await context.Database.MigrateAsync();
+        // WAL permite leer mientras otro hilo escribe (báscula, cámaras y pantallas usan la base a la vez).
+        await context.Database.ExecuteSqlRawAsync("PRAGMA journal_mode=WAL;");
 
         await MigrateLegacyScaleConfigAsync(context);
         await SeedAsync(context);
     }
 
-    private async Task EnsureLegacyRawSqlAsync(AppDbContext context)
+    public AppDbContext CreateContext() => new LocalDbContext(_databasePath);
+
+    public const string StationCodeKey = "station_code";
+
+    // El código identifica la serie de tickets de este puesto; vive solo en el almacén local.
+    public async Task<string?> GetStationCodeAsync()
     {
-        await context.Database.ExecuteSqlRawAsync(@"
-            CREATE TABLE IF NOT EXISTS Drivers (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                FullName TEXT NOT NULL,
-                Phone TEXT,
-                CompanyId INTEGER NOT NULL,
-                IsActive INTEGER NOT NULL DEFAULT 1,
-                FOREIGN KEY (CompanyId) REFERENCES Companies(Id) ON DELETE CASCADE
-            )");
-        try
-        {
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE WeighingRecords ADD COLUMN PhotoPathExit TEXT NULL");
-        }
-        catch { }
-        try
-        {
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE WeighingRecords ADD COLUMN EntryScaleName TEXT NULL");
-        }
-        catch { }
-        try
-        {
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE WeighingRecords ADD COLUMN ExitScaleName TEXT NULL");
-        }
-        catch { }
-        try
-        {
-            await context.Database.ExecuteSqlRawAsync(@"
-                ALTER TABLE WeighingRecords ADD COLUMN IsExitWeightManual INTEGER NOT NULL DEFAULT 0");
-        }
-        catch { }
-        await context.Database.ExecuteSqlRawAsync(@"
-            CREATE TABLE IF NOT EXISTS ScaleConfigs (
-                Id INTEGER PRIMARY KEY AUTOINCREMENT,
-                Name TEXT NOT NULL,
-                IsActive INTEGER NOT NULL DEFAULT 1,
-                SortOrder INTEGER NOT NULL DEFAULT 0,
-                ProtocolType TEXT NOT NULL DEFAULT 'Serial',
-                PortName TEXT,
-                BaudRate INTEGER NOT NULL DEFAULT 9600,
-                Parity INTEGER NOT NULL DEFAULT 0,
-                DataBits INTEGER NOT NULL DEFAULT 8,
-                StopBits INTEGER NOT NULL DEFAULT 1,
-                IpAddress TEXT,
-                TcpPort INTEGER NOT NULL DEFAULT 502,
-                SlaveId INTEGER NOT NULL DEFAULT 1,
-                RegisterAddress INTEGER NOT NULL DEFAULT 0,
-                ReadIntervalMs INTEGER NOT NULL DEFAULT 200
-            )");
+        await using var context = CreateContext();
+        var value = await context.SystemConfigs
+            .Where(c => c.Key == StationCodeKey)
+            .Select(c => c.Value)
+            .FirstOrDefaultAsync();
+        return string.IsNullOrWhiteSpace(value) ? null : value;
     }
 
-    public AppDbContext CreateContext() => new(_dbPath);
+    public async Task SetStationCodeAsync(string code)
+    {
+        code = StationCodePolicy.Normalize(code);
+        if (!StationCodePolicy.IsValid(code)) throw new ArgumentException(StationCodePolicy.Describe());
+
+        await using var context = CreateContext();
+        var config = await context.SystemConfigs.FirstOrDefaultAsync(c => c.Key == StationCodeKey);
+        if (config is null)
+            context.SystemConfigs.Add(new SystemConfig { Key = StationCodeKey, Value = code });
+        else
+            config.Value = code;
+        await context.SaveChangesAsync();
+    }
+
+    // ── Opciones de protocolos configurables ──────────────
+    // Se guardan como JSON en SystemConfigs (sin tocar el esquema): clave scale_options_{Id de báscula}.
+
+    private const string ScaleOptionsKeyPrefix = "scale_options_";
+    private const int MaxConfigValueLength = 500;
+
+    public async Task LoadScaleOptionsAsync(IEnumerable<ScaleConfig> scales)
+    {
+        var list = scales.ToList();
+        if (list.Count == 0) return;
+
+        var keys = list.Select(s => ScaleOptionsKeyPrefix + s.Id).ToList();
+        await using var context = CreateContext();
+        var rows = await context.SystemConfigs.Where(c => keys.Contains(c.Key)).ToListAsync();
+        var byKey = rows.ToDictionary(r => r.Key, r => r.Value);
+
+        foreach (var scale in list)
+            scale.Options = byKey.TryGetValue(ScaleOptionsKeyPrefix + scale.Id, out var json)
+                ? ProtocolOptions.FromJson(json)
+                : null;
+    }
+
+    public async Task SaveScaleOptionsAsync(ScaleConfig scale)
+    {
+        var key = ScaleOptionsKeyPrefix + scale.Id;
+        await using var context = CreateContext();
+        var row = await context.SystemConfigs.FirstOrDefaultAsync(c => c.Key == key);
+
+        if (scale.Options is null)
+        {
+            if (row is not null) context.SystemConfigs.Remove(row);
+        }
+        else
+        {
+            var json = scale.Options.ToJson();
+            if (json.Length > MaxConfigValueLength)
+                throw new InvalidOperationException($"Los parámetros del protocolo son demasiado largos ({json.Length} de {MaxConfigValueLength} caracteres). Acorte los patrones o comandos.");
+
+            if (row is null) context.SystemConfigs.Add(new SystemConfig { Key = key, Value = json });
+            else row.Value = json;
+        }
+        await context.SaveChangesAsync();
+    }
+
+    public async Task DeleteScaleOptionsAsync(int scaleId)
+    {
+        var key = ScaleOptionsKeyPrefix + scaleId;
+        await using var context = CreateContext();
+        var row = await context.SystemConfigs.FirstOrDefaultAsync(c => c.Key == key);
+        if (row is null) return;
+        context.SystemConfigs.Remove(row);
+        await context.SaveChangesAsync();
+    }
 
     public async Task<bool> HasAdminAsync()
     {
@@ -130,7 +122,7 @@ public class DatabaseService
 
     public async Task CreateInitialAdminAsync(string username, string password, string fullName = "")
     {
-        ValidateCredentials(username, password);
+        ValidateCredentials(UserRoles.Admin, username, password);
         await using var context = CreateContext();
         if (await context.Users.AnyAsync(u => u.Role == UserRoles.Admin))
             throw new InvalidOperationException("Ya existe un administrador de cliente.");
@@ -144,7 +136,7 @@ public class DatabaseService
 
     public async Task ProvisionSuperAdminAsync(string username, string password, string fullName = "")
     {
-        ValidateCredentials(username, password);
+        ValidateCredentials(UserRoles.SuperAdmin, username, password);
         await using var context = CreateContext();
         if (await context.Users.AnyAsync(u => u.Role == UserRoles.SuperAdmin))
             throw new InvalidOperationException("Ya existe un superadministrador. Use el procedimiento de restablecimiento autorizado.");
@@ -156,48 +148,15 @@ public class DatabaseService
         await context.SaveChangesAsync();
     }
 
-    private async Task MigrateUserPasswordsAsync(AppDbContext context)
+    private static void ValidateCredentials(string role, string username, string password)
     {
-        try { await context.Database.ExecuteSqlRawAsync("ALTER TABLE Users ADD COLUMN PasswordHash TEXT NULL"); }
-        catch { /* New databases already have the column. */ }
-
-        var legacyUsers = new List<(int Id, string Password)>();
-        await using var connection = context.Database.GetDbConnection();
-        await connection.OpenAsync();
-        await using (var command = connection.CreateCommand())
-        {
-            command.CommandText = "SELECT Id, Password FROM Users WHERE (PasswordHash IS NULL OR PasswordHash = '') AND Password <> ''";
-            try
-            {
-                await using var reader = await command.ExecuteReaderAsync();
-                while (await reader.ReadAsync()) legacyUsers.Add((reader.GetInt32(0), reader.GetString(1)));
-            }
-            catch { return; } // No legacy Password column in a newly-created database.
-        }
-
-        if (legacyUsers.Count == 0) return;
-        await using var transaction = await connection.BeginTransactionAsync();
-        foreach (var (id, password) in legacyUsers)
-        {
-            await using var update = connection.CreateCommand();
-            update.Transaction = transaction;
-            update.CommandText = "UPDATE Users SET PasswordHash = $hash, Password = '' WHERE Id = $id";
-            var hash = update.CreateParameter(); hash.ParameterName = "$hash"; hash.Value = _passwordHasher.Hash(password); update.Parameters.Add(hash);
-            var key = update.CreateParameter(); key.ParameterName = "$id"; key.Value = id; update.Parameters.Add(key);
-            await update.ExecuteNonQueryAsync();
-        }
-        await transaction.CommitAsync();
-    }
-
-    private static void ValidateCredentials(string username, string password)
-    {
-        if (string.IsNullOrWhiteSpace(username)) throw new ArgumentException("El nombre de usuario es obligatorio.");
-        if (password.Length is < 14 or > 128) throw new ArgumentException("La contraseña debe tener entre 14 y 128 caracteres.");
+        if (!UsernamePolicy.IsValid(username)) throw new ArgumentException(UsernamePolicy.Describe());
+        if (!PasswordPolicy.IsValid(role, password)) throw new ArgumentException(PasswordPolicy.Describe(role));
     }
 
     private async Task SeedAsync(AppDbContext context)
     {
-        if (await context.Users.AnyAsync())
+        if (await context.Users.AnyAsync() || await context.SystemConfigs.AnyAsync())
         {
             await SeedMissingAsync(context);
             return;

@@ -3,7 +3,8 @@ using PesaControl.Core.Models;
 
 namespace PesaControl.Data.Data;
 
-public class AppDbContext : DbContext
+// Modelo compartido por el almacén local de cada puesto (SQLite) y el servidor central (PostgreSQL).
+public abstract class AppDbContext : DbContext
 {
     public DbSet<User> Users => Set<User>();
     public DbSet<WeighingRecord> WeighingRecords => Set<WeighingRecord>();
@@ -19,21 +20,18 @@ public class AppDbContext : DbContext
     public DbSet<Driver> Drivers => Set<Driver>();
     public DbSet<ScaleConfig> ScaleConfigs => Set<ScaleConfig>();
     public DbSet<DvrConfig> DvrConfigs => Set<DvrConfig>();
+    public DbSet<TicketCounter> TicketCounters => Set<TicketCounter>();
 
-    private readonly string _dbPath;
-
-    public AppDbContext()
+    protected AppDbContext(DbContextOptions options) : base(options)
     {
-        _dbPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "pesacontrol.db");
     }
 
-    public AppDbContext(string dbPath)
+    // Las fechas se guardan como hora local: los valores en UTC se convierten al escribir.
+    protected override void ConfigureConventions(ModelConfigurationBuilder configurationBuilder)
     {
-        _dbPath = dbPath;
+        configurationBuilder.Properties<DateTime>().HaveConversion<LocalDateTimeConverter>();
+        configurationBuilder.Properties<DateTime?>().HaveConversion<LocalDateTimeConverter>();
     }
-
-    protected override void OnConfiguring(DbContextOptionsBuilder options)
-        => options.UseSqlite($"Data Source={_dbPath}");
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -42,6 +40,7 @@ public class AppDbContext : DbContext
             entity.ToTable("WeighingRecords");
             entity.HasKey(e => e.Id);
             entity.Property(e => e.TicketNumber).HasMaxLength(20);
+            entity.Property(e => e.StationCode).HasMaxLength(4);
             entity.Property(e => e.LicensePlate).HasMaxLength(20);
             entity.Property(e => e.PlateCountry).HasMaxLength(2).HasDefaultValue("CL");
             entity.Property(e => e.OperatorName).HasMaxLength(100);
@@ -57,9 +56,18 @@ public class AppDbContext : DbContext
             entity.Property(e => e.Status).HasConversion<string>().HasMaxLength(20);
             entity.HasOne(e => e.Product).WithMany().HasForeignKey(e => e.ProductId).OnDelete(DeleteBehavior.SetNull);
             entity.HasOne(e => e.Company).WithMany().HasForeignKey(e => e.CompanyId).OnDelete(DeleteBehavior.SetNull);
+            entity.Property(e => e.SyncStatus).HasConversion<string>().HasMaxLength(10).HasDefaultValue(SyncStatus.Pending);
+            entity.HasIndex(e => e.SyncStatus);
             entity.HasIndex(e => e.TicketNumber).IsUnique();
             entity.HasIndex(e => e.WeighInTime);
             entity.HasIndex(e => e.LicensePlate);
+        });
+
+        modelBuilder.Entity<TicketCounter>(entity =>
+        {
+            entity.ToTable("TicketCounters");
+            entity.HasKey(e => e.Prefix);
+            entity.Property(e => e.Prefix).HasMaxLength(20);
         });
 
         modelBuilder.Entity<User>(entity =>
