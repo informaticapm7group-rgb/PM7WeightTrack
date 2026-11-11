@@ -52,6 +52,6 @@ No hay proyectos de pruebas automatizadas.
 
 - `AuthService` se instancia manualmente (`new AuthService()`). Migrar a inyección de dependencias en fases posteriores.
 - Las contraseñas usan Argon2id (`Core/Security`), junto con las políticas de contraseña, usuario y nombre.
-- `AppDbContext` es la base abstracta con el modelo compartido. La app solo usa `LocalDbContext` (SQLite, archivo en `%LocalAppData%/PesaControl/pesacontrol.db`, o la ruta de `PESACONTROL_DB_PATH`). `CentralDbContext` (PostgreSQL) es el lado servidor y aún no lo usa la app: se conectará con la sincronización (ver `PLAN_MEJORAS.md`).
+- `AppDbContext` es la base abstracta con el modelo compartido. La app solo usa `LocalDbContext` (SQLite, archivo en `%LocalAppData%/PM7WeightTrack/PM7WeightTrack.db`, o la ruta de `PESACONTROL_DB_PATH`). `CentralDbContext` (PostgreSQL) es el lado servidor y aún no lo usa la app: se conectará con la sincronización (ver `PLAN_MEJORAS.md`).
 - Migraciones: `dotnet dotnet-ef migrations add Nombre --context LocalDbContext --project PesaControl.data --output-dir Migrations/Sqlite` (y `--context CentralDbContext --output-dir Migrations/Postgres` para PostgreSQL). Ambos contextos deben generar migraciones cuando cambie el modelo.
 - `PlateRecord.Source` menciona PaddleOCR, pero no hay implementación local de PaddleOCR en el código; solo PlateRecognizer y entrada manual.

@@ -161,9 +161,7 @@ public partial class BackupViewModel : ObservableObject
 
         try
         {
-            var backupDir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "PesaControl", "Backups");
+            var backupDir = Path.Combine(PesaControl.Data.Data.DatabaseSettings.AppDataDirectory(), "Backups");
 
             if (!Directory.Exists(backupDir)) return;
 

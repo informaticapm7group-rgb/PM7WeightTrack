@@ -12,7 +12,7 @@ public static class DatabaseSettings
         if (!string.IsNullOrWhiteSpace(fromEnvironment))
             return fromEnvironment;
 
-        return Path.Combine(AppDataDirectory(), "pesacontrol.db");
+        return Path.Combine(AppDataDirectory(), "PM7WeightTrack.db");
     }
 
     public static string GetPhotosDirectory()
@@ -24,6 +24,8 @@ public static class DatabaseSettings
         return Path.Combine(AppDataDirectory(), "Photos");
     }
 
-    private static string AppDataDirectory()
-        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "PesaControl");
+    public const string AppDataFolderName = "PM7WeightTrack";
+
+    public static string AppDataDirectory()
+        => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), AppDataFolderName);
 }

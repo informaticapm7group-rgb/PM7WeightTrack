@@ -621,9 +621,7 @@ public partial class WeighingViewModel : ObservableObject
             var jpeg = await captureTask;
             if (jpeg == null || jpeg.Length == 0) return;
 
-            var dir = Path.Combine(
-                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-                "PesaControl", "Photos");
+            var dir = Path.Combine(PesaControl.Data.Data.DatabaseSettings.AppDataDirectory(), "Photos");
             Directory.CreateDirectory(dir);
 
             var fileName = $"{record.TicketNumber}-{suffix}.jpg";
